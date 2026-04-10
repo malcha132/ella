@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ELLA's GAME</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Press Start 2P', monospace;
+    overflow: hidden;
+    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a0a 100%);
+  }
+  body::after {
+    content:'';
+    position:fixed;
+    inset:0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.18) 3px, rgba(0,0,0,0.18) 4px);
+    pointer-events:none;
+    z-index:999;
+  }
+  .title {
+    font-size: 11px;
+    color: #ff9900;
+    text-shadow: 0 0 14px #ff9900, 0 0 28px #ff6600;
+    letter-spacing: 3px;
+    margin-bottom: 10px;
+    animation: flicker 5s infinite;
+  }
+  @keyframes flicker { 0%,97%,100%{opacity:1} 98%{opacity:.6} 99%{opacity:1} }
+  .screen-wrap {
+    background: #1a1a1a;
+    border: 3px solid #444;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 0 40px rgba(77,200,255,0.1), inset 0 0 20px rgba(0,0,0,0.6);
+  }
+  canvas {
+    display: block;
+    background: #0a1a0a;
+    border: 2px solid #1a3a1a;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.7), 0 0 20px rgba(77,255,77,0.08);
+    image-rendering: pixelated;
+  }
+  .hud-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+    font-size: 7px;
+    color: #2d8a2d;
+    padding: 0 2px;
+  }
+  .hud-bar .val { color: #4dff4d; }
+  .hud-bar .hi  { color: #ffaa00; }
+  .btn-row { display:flex; gap:12px; margin-top:10px; justify-content:center; }
+  .btn {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 7px;
+    background: #111;
+    color: #4dff4d;
+    border: 2px solid #1a5a1a;
+    padding: 9px 14px;
+    cursor: pointer;
+    border-radius: 3px;
+    letter-spacing: 1px;
+    transition: all .1s;
+  }
+  .btn:hover { background:#1a3a1a; border-color:#4dff4d; box-shadow:0 0 8px #4dff4d44; }
+  .rotate-btns { display:none; gap:30px; margin-top:14px; justify-content:center; }
+  .rbtn {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 20px;
+    background: #111;
+    color: #4dff4d;
+    border: 2px solid #1a5a1a;
+    padding: 14px 24px;
+    cursor: pointer;
+    border-radius: 4px;
+    user-select: none;
+    touch-action: manipulation;
+  }
+  .rbtn:active { background:#1a3a1a; }
+  .hint { font-size:6px; color:#1a4a1a; text-align:center; margin-top:8px; letter-spacing:1px; }
+  @media (max-width:520px) {
+    .rotate-btns { display:flex; }
+    .hint { display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="title">★ ELLA's GAME ★</div>
+<div class="screen-wrap">
+  <canvas id="c" width="420" height="420"></canvas>
+  <div class="hud-bar">
+    <div>SKÓRE: <span class="val" id="sc">00000</span></div>
+    <div>LEVEL: <span class="val" id="lv">1</span></div>
+    <div>REKORD: <span class="hi" id="hi">00000</span></div>
+    <div>♥: <span class="val" id="lf">3</span></div>
+  </div>
+</div>
+<div class="btn-row">
+  <button class="btn" id="sb" onclick="startGame()">▶ START</button>
+  <button class="btn" onclick="togglePause()">⏸ PAUZA</button>
+</div>
+<div class="rotate-btns">
+  <button class="rbtn" id="lbtn">↺</button>
+  <button class="rbtn" id="rbtn2">↻</button>
+</div>
+<div class="hint">← → OTÁČEJ VLKA &nbsp;|&nbsp; ENTER = START &nbsp;|&nbsp; P = PAUZA</div>
+
+<script>
+const cv=document.getElementById('c');
+const cx=cv.getContext('2d');
+const W=cv.width,H=cv.height,CX=W/2,CY=H/2;
+
+const P={
+  bg:'#060e06',dark:'#0a150a',dim:'#1a4a1a',mid:'#2d8a2d',
+  bright:'#4dff4d',glow:'#ccffcc',red:'#ff3333',amber:'#ffbb00',
+  blue:'#44aaff',scan:'rgba(0,0,0,0.12)',
+};
+
+let state='idle',score=0,hiScore=parseInt(localStorage.getItem('ella_hi')||'0');
+let lives=3,level=1,frame=0,raf;
+let wolfDir=0,catchAnim=0,shakeT=0,msgT=0,msg='',msgCol=P.bright,combo=0;
+let eggs=[],particles=[];
+const keys={};
+
+document.addEventListener('keydown',e=>{
+  if(!keys[e.key]){
+    keys[e.key]=true;
+    if((e.key==='ArrowLeft'||e.key==='a'||e.key==='A')&&state==='playing') rotateCCW();
+    if((e.key==='ArrowRight'||e.key==='d'||e.key==='D')&&state==='playing') rotateCW();
+    if(e.key==='Enter'&&state!=='playing') startGame();
+    if(e.key==='p'||e.key==='P') togglePause();
+  }
+});
+document.addEventListener('keyup',e=>keys[e.key]=false);
+document.getElementById('lbtn').addEventListener('click',()=>{if(state==='playing')rotateCCW();});
+document.getElementById('rbtn2').addEventListener('click',()=>{if(state==='playing')rotateCW();});
+
+function rotateCCW(){wolfDir=(wolfDir+3)%4;catchAnim=0;}
+function rotateCW(){wolfDir=(wolfDir+1)%4;catchAnim=0;}
+
+function startGame(){
+  score=0;lives=3;level=1;frame=0;eggs=[];particles=[];
+  wolfDir=0;combo=0;shakeT=0;msgT=0;catchAnim=0;
+  state='playing';
+  document.getElementById('sb').textContent='↺ ZNOVU';
+  updateHUD();
+  if(raf) cancelAnimationFrame(raf);
+  loop();
+}
+
+function togglePause(){
+  if(state==='playing'){state='paused';cancelAnimationFrame(raf);drawPause();}
+  else if(state==='paused'){state='playing';loop();}
+}
+
+function updateHUD(){
+  document.getElementById('sc').textContent=String(score).padStart(5,'0');
+  document.getElementById('hi').textContent=String(hiScore).padStart(5,'0');
+  document.getElementById('lv').textContent=level;
+  document.getElementById('lf').textContent='♥'.repeat(lives)+'♡'.repeat(Math.max(0,3-lives));
+}
+
+function spawnEgg(){
+  const side=Math.floor(Math.random()*4);
+  const row=Math.floor(Math.random()*2);
+  const speed=1.5+level*0.25+Math.random()*0.7;
+  eggs.push({side,row,progress:0,speed,alive:true});
+}
+
+function eggPos(side,row,progress){
+  const offset=row===0?-20:20;
+  const reach=CX-54;
+  switch(side){
+    case 0: return{x:CX+offset, y:12+(reach)*progress};
+    case 1: return{x:W-12-reach*progress, y:CY+offset};
+    case 2: return{x:CX-offset, y:H-12-reach*progress};
+    case 3: return{x:12+reach*progress, y:CY-offset};
+  }
+}
+
+function update(){
+  if(state!=='playing') return;
+  frame++;
+  const si=Math.max(38,82-level*7);
+  if(frame%si===0) spawnEgg();
+  if(level>=4&&frame%Math.max(55,110-level*8)===25) spawnEgg();
+
+  for(let i=eggs.length-1;i>=0;i--){
+    const e=eggs[i];
+    e.progress+=e.speed*0.012;
+    if(e.progress>=1.0){
+      if(wolfDir===e.side){
+        combo++;
+        const pts=combo>=5?40:combo>=3?25:10;
+        score+=pts;
+        if(score>hiScore){hiScore=score;localStorage.setItem('ella_hi',hiScore);}
+        catchAnim=14;
+        spawnParticles(eggPos(e.side,e.row,0.9),combo>=3?P.amber:P.bright,10);
+        if(combo===3) showMsg('COMBO!',P.amber);
+        if(combo===5) showMsg('SUPER!!',P.amber);
+        if(combo===10) showMsg('МАСТЕР!',P.glow);
+        if(score>0&&score%120===0&&level<10){level++;showMsg('LEVEL '+level,P.blue);}
+      } else {
+        combo=0;lives--;shakeT=22;
+        spawnParticles(eggPos(e.side,e.row,0.95),P.red,8);
+        showMsg('АУЧ!',P.red);
+        if(lives<=0){gameOver();return;}
+      }
+      eggs.splice(i,1);
+      updateHUD();
+    }
+  }
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;
+    p.life-=p.decay;
+    if(p.life<=0) particles.splice(i,1);
+  }
+  if(shakeT>0) shakeT--;
+  if(msgT>0) msgT--;
+  if(catchAnim>0) catchAnim--;
+}
+
+function spawnParticles(pos,col,n){
+  for(let i=0;i<n;i++){
+    const a=Math.PI*2*i/n+Math.random();
+    const s=1.5+Math.random()*3;
+    particles.push({x:pos.x,y:pos.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1.5,
+      life:1,decay:0.04+Math.random()*0.04,size:2+Math.random()*3,color:col});
+  }
+}
+
+function showMsg(m,c){msg=m;msgCol=c||P.bright;msgT=90;}
+function gameOver(){state='gameover';cancelAnimationFrame(raf);setTimeout(drawGameOver,80);}
+
+function loop(){update();draw();raf=requestAnimationFrame(loop);}
+
+function draw(){
+  cx.save();
+  if(shakeT>0) cx.translate((Math.random()-.5)*7,(Math.random()-.5)*5);
+  cx.fillStyle=P.bg;cx.fillRect(0,0,W,H);
+  cx.fillStyle=P.scan;
+  for(let y=0;y<H;y+=4) cx.fillRect(0,y,W,2);
+
+  drawCorridors();
+  drawArena();
+
+  eggs.forEach(e=>{
+    const pos=eggPos(e.side,e.row,e.progress);
+    drawEgg(pos.x,pos.y,e.side,e.progress);
+  });
+
+  drawWolf(wolfDir,catchAnim>0);
+
+  particles.forEach(p=>{
+    cx.globalAlpha=p.life;
+    cx.fillStyle=p.color;
+    cx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size);
+  });
+  cx.globalAlpha=1;
+
+  // Top HUD
+  cx.fillStyle='rgba(0,0,0,0.75)';cx.fillRect(0,0,W,26);
+  cx.fillStyle=P.dim;cx.fillRect(0,26,W,1);
+  cx.fillStyle=P.mid;cx.font='7px "Press Start 2P"';cx.fillText('SKÓRE',8,18);
+  cx.fillStyle=P.bright;cx.fillText(String(score).padStart(5,'0'),72,18);
+  cx.fillStyle=P.mid;cx.fillText('LV',W/2-18,18);
+  cx.fillStyle=P.amber;cx.fillText(String(level),W/2+4,18);
+  cx.fillStyle=lives<=1?P.red:P.mid;cx.fillText('♥'+lives,W-52,18);
+
+  if(msgT>0){
+    cx.save();cx.globalAlpha=Math.min(1,msgT/20);
+    cx.fillStyle=msgCol;cx.font='13px "Press Start 2P"';
+    cx.textAlign='center';cx.shadowColor=msgCol;cx.shadowBlur=18;
+    cx.fillText(msg,CX,CY-72);cx.shadowBlur=0;cx.textAlign='left';cx.restore();
+  }
+  cx.restore();
+  if(state==='idle') drawIdle();
+}
+
+function drawCorridors(){
+  const hw=40;
+  cx.fillStyle='rgba(0,30,0,0.45)';
+  cx.fillRect(CX-hw,0,hw*2,CY-52);
+  cx.fillRect(CX-hw,CY+52,hw*2,CY-52);
+  cx.fillRect(0,CY-hw,CX-52,hw*2);
+  cx.fillRect(CX+52,CY-hw,CX-52,hw*2);
+
+  cx.strokeStyle=P.dim;cx.lineWidth=1.5;
+  cx.strokeRect(CX-hw,0,hw*2,CY-52);
+  cx.strokeRect(CX-hw,CY+52,hw*2,CY-52);
+  cx.strokeRect(0,CY-hw,CX-52,hw*2);
+  cx.strokeRect(CX+52,CY-hw,CX-52,hw*2);
+
+  cx.strokeStyle='rgba(29,74,29,0.5)';cx.lineWidth=1;
+  cx.setLineDash([5,5]);
+  cx.beginPath();cx.moveTo(CX,6);cx.lineTo(CX,CY-54);cx.stroke();
+  cx.beginPath();cx.moveTo(CX,CY+54);cx.lineTo(CX,H-6);cx.stroke();
+  cx.beginPath();cx.moveTo(6,CY);cx.lineTo(CX-54,CY);cx.stroke();
+  cx.beginPath();cx.moveTo(CX+54,CY);cx.lineTo(W-6,CY);cx.stroke();
+  cx.setLineDash([]);
+
+  // Hens at outer ends
+  drawHen(CX-14,4,0);
+  drawHen(W-38,CY-14,1);
+  drawHen(CX-14,H-38,2);
+  drawHen(4,CY-14,3);
+}
+
+function drawArena(){
+  const r=52;
+  cx.fillStyle='rgba(0,18,0,0.85)';
+  cx.beginPath();cx.arc(CX,CY,r,0,Math.PI*2);cx.fill();
+
+  const angleMap=[
+    [-Math.PI/2-0.5,-Math.PI/2+0.5],
+    [-0.5,0.5],
+    [Math.PI/2-0.5,Math.PI/2+0.5],
+    [Math.PI-0.5,Math.PI+0.5],
+  ];
+  cx.strokeStyle=catchAnim>0?P.amber:P.dim;
+  cx.lineWidth=catchAnim>0?3:1.5;
+  if(catchAnim>0){cx.shadowColor=P.amber;cx.shadowBlur=18;}
+  cx.beginPath();cx.arc(CX,CY,r,0,Math.PI*2);cx.stroke();
+  cx.shadowBlur=0;
+
+  const [a1,a2]=angleMap[wolfDir];
+  cx.strokeStyle=P.bright;cx.lineWidth=4;
+  cx.shadowColor=P.bright;cx.shadowBlur=12;
+  cx.beginPath();cx.arc(CX,CY,r+5,a1,a2);cx.stroke();
+  cx.shadowBlur=0;
+
+  // Side labels
+  const labels=['▲','▶','▼','◀'];
+  const lpos=[{x:CX,y:CY-38},{x:CX+38,y:CY+4},{x:CX,y:CY+46},{x:CX-38,y:CY+4}];
+  labels.forEach((l,i)=>{
+    cx.fillStyle=i===wolfDir?(catchAnim>0?P.amber:P.glow):P.dim;
+    cx.font='10px "Press Start 2P"';cx.textAlign='center';
+    cx.fillText(l,lpos[i].x,lpos[i].y);
+  });
+  cx.textAlign='left';
+}
+
+function drawWolf(dir,catching){
+  cx.save();
+  cx.translate(CX,CY);
+  cx.rotate(dir*Math.PI/2);
+  const fc=catching?P.amber:P.bright;
+  const dm=catching?'#886600':P.mid;
+
+  f(dm,-14,2,28,22);f(fc,-12,4,24,18);
+  f(fc,-10,-18,20,18);
+  f(dm,-14,-24,8,10);f(fc,-12,-22,6,8);
+  f(dm,6,-24,8,10);f(fc,8,-22,6,8);
+  f(dm,-6,-8,12,10);f(fc,-4,-6,8,8);
+  f('#000',-3,-8,6,4);
+  f('#000',-8,-16,5,5);f('#fff',-7,-15,3,3);
+  f('#000',3,-16,5,5);f('#fff',4,-15,3,3);
+  if(catching){
+    f(P.amber,-26,-6,13,10);f(P.amber,13,-6,13,10);
+  } else {
+    f(dm,-24,6,10,10);f(dm,14,6,10,10);
+  }
+  f(dm,-4,22,8,12);f(dm,-1,30,6,8);
+  cx.restore();
+}
+
+function f(col,x,y,w,h){
+  cx.fillStyle=col;
+  cx.fillRect(Math.round(x),Math.round(y),w,h);
+}
+
+function drawHen(x,y,side){
+  cx.save();
+  cx.translate(x+16,y+16);
+  const rots=[Math.PI/2,Math.PI,-Math.PI/2,0];
+  cx.rotate(rots[side]);
+  cx.fillStyle=P.bright;cx.fillRect(-10,-6,20,14);
+  cx.fillRect(6,-10,12,10);
+  cx.fillStyle=P.amber;cx.fillRect(15,-8,5,4);
+  cx.fillStyle='#000';cx.fillRect(9,-9,4,4);
+  cx.fillStyle=P.glow;cx.fillRect(10,-8,2,2);
+  cx.fillStyle=P.red;cx.fillRect(6,-14,4,6);cx.fillRect(10,-16,4,8);
+  cx.fillStyle=P.mid;cx.fillRect(-8,0,16,6);
+  cx.restore();
+}
+
+function drawEgg(x,y,side,progress){
+  cx.save();
+  cx.translate(x,y);
+  cx.globalAlpha=0.4+progress*0.6;
+  cx.fillStyle=P.bright;
+  cx.fillRect(-5,-7,10,2);cx.fillRect(-6,-5,12,10);cx.fillRect(-5,5,10,2);
+  cx.fillStyle=P.glow;cx.fillRect(-3,-5,3,4);
+  cx.globalAlpha=1;
+  cx.restore();
+}
+
+function drawIdle(){
+  cx.fillStyle='rgba(6,14,6,0.88)';cx.fillRect(0,34,W,H-34);
+  cx.textAlign='center';
+  cx.fillStyle=P.amber;cx.font='16px "Press Start 2P"';
+  cx.shadowColor=P.amber;cx.shadowBlur=20;
+  cx.fillText("ELLA'S GAME",CX,105);cx.shadowBlur=0;
+  cx.fillStyle=P.mid;cx.font='6px "Press Start 2P"';
+  cx.fillText('SOVĚTSKÁ KLASIKA — НУ ПОГОДИ',CX,132);
+  cx.fillStyle=P.bright;cx.font='7px "Press Start 2P"';
+  if(Math.floor(Date.now()/600)%2===0) cx.fillText('▶  STISKNI START',CX,188);
+  cx.fillStyle=P.dim;cx.font='6px "Press Start 2P"';
+  cx.fillText('VAJÍČKA PADAJÍ ZE 4 STRAN',CX,234);
+  cx.fillText('OTÁČEJ VLKA ← →',CX,256);
+  cx.fillText('NENECH JE DOPADNOUT NA ZEM!',CX,278);
+  cx.fillStyle=P.amber;cx.font='7px "Press Start 2P"';
+  cx.fillText('REKORD: '+String(hiScore).padStart(5,'0'),CX,322);
+  cx.textAlign='left';
+  requestAnimationFrame(draw);
+}
+
+function drawPause(){
+  cx.fillStyle='rgba(6,14,6,0.82)';cx.fillRect(0,0,W,H);
+  cx.textAlign='center';
+  cx.fillStyle=P.amber;cx.font='16px "Press Start 2P"';
+  cx.shadowColor=P.amber;cx.shadowBlur=16;cx.fillText('PAUZA',CX,CY-10);cx.shadowBlur=0;
+  cx.fillStyle=P.mid;cx.font='6px "Press Start 2P"';
+  cx.fillText('STISKNI P PRO POKRAČOVÁNÍ',CX,CY+30);cx.textAlign='left';
+}
+
+function drawGameOver(){
+  cx.fillStyle='rgba(6,14,6,0.90)';cx.fillRect(0,0,W,H);
+  cx.textAlign='center';
+  cx.fillStyle=P.red;cx.font='14px "Press Start 2P"';
+  cx.shadowColor=P.red;cx.shadowBlur=20;cx.fillText('KONEC HRY',CX,CY-70);cx.shadowBlur=0;
+  cx.fillStyle=P.bright;cx.font='8px "Press Start 2P"';
+  cx.fillText('SKÓRE: '+String(score).padStart(5,'0'),CX,CY-30);
+  if(score>0&&score>=hiScore){
+    cx.fillStyle=P.amber;cx.font='9px "Press Start 2P"';
+    cx.shadowColor=P.amber;cx.shadowBlur=14;
+    cx.fillText('★ NOVÝ REKORD! ★',CX,CY+10);cx.shadowBlur=0;
+  }
+  cx.fillStyle=P.amber;cx.font='7px "Press Start 2P"';
+  cx.fillText('REKORD: '+String(hiScore).padStart(5,'0'),CX,CY+42);
+  cx.fillStyle=P.mid;cx.font='6px "Press Start 2P"';
+  if(Math.floor(Date.now()/700)%2===0) cx.fillText('STISKNI START PRO NOVOU HRU',CX,CY+82);
+  cx.textAlign='left';
+  requestAnimationFrame(drawGameOver);
+}
+
+updateHUD();draw();
+</script>
+</body>
+</html>
